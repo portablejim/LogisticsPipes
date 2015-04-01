@@ -9,17 +9,17 @@ import java.util.Set;
 import java.util.WeakHashMap;
 
 import logisticspipes.config.Configs;
+import logisticspipes.interfaces.routing.IFilter;
 import logisticspipes.interfaces.routing.ISpecialPipedConnection;
 import logisticspipes.pipes.basic.LogisticsTileGenericPipe;
 import logisticspipes.proxy.SimpleServiceLocator;
-import logisticspipes.proxy.buildcraft.BuildCraftProxy;
 import logisticspipes.proxy.buildcraft.robots.boards.LogisticsRoutingBoardRobot;
 import logisticspipes.proxy.specialconnection.SpecialPipeConnection.ConnectionInformation;
 import logisticspipes.routing.PipeRoutingConnectionType;
 import logisticspipes.routing.pathfinder.IPipeInformationProvider;
+import logisticspipes.utils.item.ItemIdentifier;
 import logisticspipes.utils.tuples.LPPosition;
 import logisticspipes.utils.tuples.Pair;
-import logisticspipes.utils.tuples.Quartet;
 import net.minecraft.tileentity.TileEntity;
 import net.minecraft.world.World;
 import net.minecraftforge.common.util.ForgeDirection;
@@ -34,6 +34,82 @@ public class LPRobotConnectionControl implements ISpecialPipedConnection {
 	
 	public static class RobotConnection {
 		public final Set<Pair<LPPosition, ForgeDirection>> localConnectedRobots = new HashSet<Pair<LPPosition, ForgeDirection>>();
+	}
+	
+	public static class RobotConnectionFilter implements IFilter {
+		private LogisticsRoutingBoardRobot connectionFrom;
+		private LogisticsRoutingBoardRobot connectionTo;
+		
+		private RobotConnectionFilter(LogisticsRoutingBoardRobot from, LogisticsRoutingBoardRobot to) {
+			this.connectionFrom = from;
+			this.connectionTo = to;
+		}
+		
+		@Override
+		public boolean isBlocked() {	
+			return true;
+		}
+
+		@Override
+		public boolean isFilteredItem(ItemIdentifier item) {
+			if(!connectionFrom.isAcceptsItems()) {
+				return true;
+			}
+			if(connectionFrom.getCurrentTarget() != null) {
+				if(connectionFrom.getCurrentTarget().getValue2() != connectionTo) {
+					return true;
+				}
+			}
+			if(connectionTo.getCurrentTarget() != null) {
+				if(connectionTo.getCurrentTarget().getValue2() != connectionFrom) {
+					return true;
+				}
+			}
+			if(connectionFrom.getLinkedStationPosition().center().moveForward(connectionFrom.robot.getLinkedStation().side(), 0.5).distanceTo(new LPPosition(connectionFrom.robot)) > 0.05) {// Not at station
+				return true;
+			}
+			if(connectionTo.getLinkedStationPosition().center().moveForward(connectionTo.robot.getLinkedStation().side(), 0.5).distanceTo(new LPPosition(connectionTo.robot)) > 0.05) {// Not at station
+				return true;
+			}
+			if(connectionFrom.robot.getZoneToWork() != null && !connectionFrom.robot.getZoneToWork().contains(connectionTo.robot.posX, connectionTo.robot.posY, connectionTo.robot.posZ)) {
+				return true;
+			}
+			if(connectionTo.robot.getZoneToWork() != null && !connectionTo.robot.getZoneToWork().contains(connectionFrom.robot.posX, connectionFrom.robot.posY, connectionFrom.robot.posZ)) {
+				return true;
+			}	
+			return false;
+		}
+
+		@Override
+		public boolean blockProvider() {
+			return false;
+		}
+
+		@Override
+		public boolean blockCrafting() {
+			return false;
+		}
+
+		@Override
+		public boolean blockRouting() {
+			return false;
+		}
+
+		@Override
+		public boolean blockPower() {
+			return true;
+		}
+
+		@Override
+		public LPPosition getLPPosition() {
+			return connectionFrom.getLinkedStationPosition();
+		}
+
+		@Override
+		public boolean equals(Object obj) {
+			if(!(obj instanceof RobotConnectionFilter)) return false;
+			return ((RobotConnectionFilter)obj).connectionFrom == connectionFrom && ((RobotConnectionFilter)obj).connectionTo == connectionTo;
+		}
 	}
 	
 	private final Map<World, Set<Pair<LPPosition, ForgeDirection>>> globalAvailableRobots = new WeakHashMap<World, Set<Pair<LPPosition, ForgeDirection>>>();
@@ -76,7 +152,7 @@ public class LPRobotConnectionControl implements ISpecialPipedConnection {
 	
 	public boolean isModified(LogisticsRoutingBoardRobot board) {
 		Set<Pair<LPPosition, ForgeDirection>> localConnectedRobots = new HashSet<Pair<LPPosition, ForgeDirection>>();
-		LPPosition sourceRobotPosition = board.getLinkedStationPosition().center().moveForward(board.robot.getDockingStation().side(), 0.5);
+		LPPosition sourceRobotPosition = board.getLinkedStationPosition().center().moveForward(board.robot.getLinkedStation().side(), 0.5);
 		IZone zone = board.robot.getZoneToWork();
 		for(Pair<LPPosition, ForgeDirection> canidatePos: globalAvailableRobots.get(board.robot.worldObj)) {
 			LPPosition canidateRobotPosition = canidatePos.getValue1().copy().center().moveForward(canidatePos.getValue2(), 0.5);
@@ -127,55 +203,30 @@ public class LPRobotConnectionControl implements ISpecialPipedConnection {
 			if(robot == null) continue;
 			if(!(robot.getBoard() instanceof LogisticsRoutingBoardRobot)) continue;
 			if(robot.isDead) continue;
-			if(!((LogisticsRoutingBoardRobot)robot.getBoard()).isAcceptsItems()) continue;
-			LPPosition robotPos = new LPPosition(robot);
-			if(((LogisticsRoutingBoardRobot)robot.getBoard()).getCurrentTarget() != null) {
-				Pair<Double, LogisticsRoutingBoardRobot> currentTarget = ((LogisticsRoutingBoardRobot)robot.getBoard()).getCurrentTarget();
-				LPPosition pipePos = currentTarget.getValue2().getLinkedStationPosition();
-				TileEntity connectedPipeTile = pipePos.getTileEntity(pipe.getWorldObj());
+			LPPosition robotPos = ((LogisticsRoutingBoardRobot)robot.getBoard()).getLinkedStationPosition().center().moveForward(dir, 0.5);
+			
+			for(Pair<LPPosition, ForgeDirection> canidatePos: ((LogisticsRoutingBoardRobot)robot.getBoard()).getConnectionDetails().localConnectedRobots) {
+				if(canidatePos.getValue1().equals(new LPPosition(startPipe))) continue;
+				TileEntity connectedPipeTile = canidatePos.getValue1().getTileEntity(pipe.getWorldObj());
 				if(!(connectedPipeTile instanceof LogisticsTileGenericPipe)) continue;
 				LogisticsTileGenericPipe connectedPipe = (LogisticsTileGenericPipe) connectedPipeTile;
 				if(!connectedPipe.isRoutingPipe()) continue;
-				IPipeInformationProvider connectedInfo = SimpleServiceLocator.pipeInformaitonManager.getInformationProviderFor(connectedPipe);
-				EntityRobotBase connectedRobot = currentTarget.getValue2().robot;
+				IPipeInformationProvider connectedPipeInfo = SimpleServiceLocator.pipeInformaitonManager.getInformationProviderFor(connectedPipe);
+				PipePluggable connectedPluggable = ((TileGenericPipe)connectedPipe.tilePart.getOriginal()).getPipePluggable(canidatePos.getValue2());
+				if(!(connectedPluggable instanceof RobotStationPluggable)) continue;
+				DockingStation connectedStation = ((RobotStationPluggable)connectedPluggable).getStation();
+				if(!connectedStation.isTaken()) continue;
+				EntityRobotBase connectedRobot = connectedStation.robotTaking();
 				if(connectedRobot == null) continue;
 				if(!(connectedRobot.getBoard() instanceof LogisticsRoutingBoardRobot)) continue;
 				if(connectedRobot.isDead) continue;
 				if(connectedRobot.getZoneToWork() != null && !connectedRobot.getZoneToWork().contains(robotPos.getXD(), robotPos.getYD(), robotPos.getZD())) continue;
-				if(!((LogisticsRoutingBoardRobot)connectedRobot.getBoard()).isAcceptsItems()) continue;
-				LPPosition connectedRobotPos = new LPPosition(connectedRobot);
-				if(pipePos.copy().center().moveForward(currentTarget.getValue2().robot.getLinkedStation().side(), 0.5).distanceTo(connectedRobotPos) > 0.05) continue; // Not at station
 				EnumSet<PipeRoutingConnectionType> newCon = connection.clone();
 				newCon.removeAll(EnumSet.of(PipeRoutingConnectionType.canPowerFrom, PipeRoutingConnectionType.canPowerSubSystemFrom));
-				double distance = currentTarget.getValue2().getLinkedStationPosition().copy().center().moveForward(currentTarget.getValue2().robot.getLinkedStation().side(), 0.5).distanceTo(robotPos);
-				list.add(new ConnectionInformation(connectedInfo, newCon, currentTarget.getValue2().robot.getLinkedStation().side().getOpposite(), dir, (distance * 3) + 21));
-			} else {
-				if(pos.copy().moveForward(dir, 0.5).distanceTo(robotPos) > 0.05) continue; // Not at station
-				for(Pair<LPPosition, ForgeDirection> canidatePos: ((LogisticsRoutingBoardRobot)robot.getBoard()).getConnectionDetails().localConnectedRobots) {
-					if(canidatePos.getValue1().equals(new LPPosition(startPipe))) continue;
-					double distance = canidatePos.getValue1().copy().center().moveForward(canidatePos.getValue2(), 0.5).distanceTo(robotPos);
-					TileEntity connectedPipeTile = canidatePos.getValue1().getTileEntity(pipe.getWorldObj());
-					if(!(connectedPipeTile instanceof LogisticsTileGenericPipe)) continue;
-					LogisticsTileGenericPipe connectedPipe = (LogisticsTileGenericPipe) connectedPipeTile;
-					if(!connectedPipe.isRoutingPipe()) continue;
-					IPipeInformationProvider connectedInfo = SimpleServiceLocator.pipeInformaitonManager.getInformationProviderFor(connectedPipe);
-					PipePluggable connectedPluggable = ((TileGenericPipe)connectedPipe.tilePart.getOriginal()).getPipePluggable(canidatePos.getValue2());
-					if(!(connectedPluggable instanceof RobotStationPluggable)) continue;
-					DockingStation connectedStation = ((RobotStationPluggable)connectedPluggable).getStation();
-					if(!connectedStation.isTaken()) continue;
-					EntityRobotBase connectedRobot = connectedStation.robotTaking();
-					if(connectedRobot == null) continue;
-					if(!(connectedRobot.getBoard() instanceof LogisticsRoutingBoardRobot)) continue;
-					if(connectedRobot.isDead) continue;
-					if(connectedRobot.getZoneToWork() != null && !connectedRobot.getZoneToWork().contains(robotPos.getXD(), robotPos.getYD(), robotPos.getZD())) continue;
-					if(!((LogisticsRoutingBoardRobot)connectedRobot.getBoard()).isAcceptsItems()) continue;
-					if(((LogisticsRoutingBoardRobot)connectedRobot.getBoard()).getCurrentTarget() != null && ((LogisticsRoutingBoardRobot)connectedRobot.getBoard()).getCurrentTarget().getValue2() != robot.getBoard()) continue;
-					LPPosition connectedRobotPos = new LPPosition(connectedRobot);
-					if(canidatePos.getValue1().copy().center().moveForward(canidatePos.getValue2(), 0.5).distanceTo(connectedRobotPos) > 0.05) continue; // Not at station
-					EnumSet<PipeRoutingConnectionType> newCon = connection.clone();
-					newCon.removeAll(EnumSet.of(PipeRoutingConnectionType.canPowerFrom, PipeRoutingConnectionType.canPowerSubSystemFrom));
-					list.add(new ConnectionInformation(connectedInfo, newCon, canidatePos.getValue2().getOpposite(), dir, (distance * 3) + 21));
-				}
+				double distance = canidatePos.getValue1().copy().center().moveForward(canidatePos.getValue2(), 0.5).distanceTo(robotPos);
+				ConnectionInformation conInfo = new ConnectionInformation(connectedPipeInfo, newCon, canidatePos.getValue2().getOpposite(), dir, (distance * 3) + 21);
+				conInfo.getFilters().add(new RobotConnectionFilter((LogisticsRoutingBoardRobot)robot.getBoard(), (LogisticsRoutingBoardRobot)connectedRobot.getBoard()));
+				list.add(conInfo);
 			}
 		}
 		return list;

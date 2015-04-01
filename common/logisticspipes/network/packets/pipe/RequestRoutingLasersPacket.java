@@ -9,6 +9,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 
+import com.google.common.collect.Multimap;
+
 import logisticspipes.LPConstants;
 import logisticspipes.config.Configs;
 import logisticspipes.network.PacketHandler;
@@ -87,7 +89,7 @@ public class RequestRoutingLasersPacket extends CoordinatesPacket {
 		}
 		lasers.add(new LaserData(pipe.xCoord, pipe.yCoord, pipe.zCoord, dir, connectionType).setStartPipe(firstPipe));
 		firstPipe = false;
-		HashMap<CoreRoutedPipe, ExitRoute> map = PathFinder.paintAndgetConnectedRoutingPipes(pipe, dir, Configs.LOGISTICS_DETECTION_COUNT, Configs.LOGISTICS_DETECTION_LENGTH, new IPaintPath() {
+		Multimap<CoreRoutedPipe, ExitRoute> map = PathFinder.paintAndgetConnectedRoutingPipes(pipe, dir, Configs.LOGISTICS_DETECTION_COUNT, Configs.LOGISTICS_DETECTION_LENGTH, new IPaintPath() {
 			@Override
 			public void addLaser(World worldObj, LaserData laser) {
 				if(pipe.getWorld() == worldObj) {
@@ -107,7 +109,7 @@ public class RequestRoutingLasersPacket extends CoordinatesPacket {
 		for(ExitRoute routeTo: connectedRouters) {
 			ExitRoute result = null;
 			CoreRoutedPipe resultPipe = null;
-			for(Entry<CoreRoutedPipe, ExitRoute> routeCanidate: map.entrySet()) {
+			for(Entry<CoreRoutedPipe, ExitRoute> routeCanidate: map.entries()) {
 				List<ExitRoute> distances = routeCanidate.getValue().destination.getDistanceTo(routeTo.destination);
 				for(ExitRoute distance:distances) {
 					if(distance.isSameWay(routeTo)) {
@@ -139,7 +141,7 @@ public class RequestRoutingLasersPacket extends CoordinatesPacket {
 			}
 			for(final ForgeDirection exitDir: routers.keySet()) {
 				if(exitDir == ForgeDirection.UNKNOWN) continue;
-				handleRouteInDirection(connectedPipe.getKey().container, exitDir, routers.get(exitDir), lasers, map.get(connectedPipe.getKey()).connectionDetails, new Log(){
+				handleRouteInDirection(connectedPipe.getKey().container, exitDir, routers.get(exitDir), lasers, map.get(connectedPipe.getKey()).iterator().next().connectionDetails /* TODO: Fix this*/, new Log(){
 					@Override
 					void log(String logString) {
 						if(LPConstants.DEBUG) {

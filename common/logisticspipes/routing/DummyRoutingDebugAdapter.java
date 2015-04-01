@@ -21,5 +21,5 @@ public class DummyRoutingDebugAdapter implements IRoutingDebugAdapter {
 	@Override public void newFlagsForPipe(EnumSet<PipeRoutingConnectionType> newFlags) {}
 	@Override public void filterList(EnumMap<PipeRoutingConnectionType, List<List<IFilter>>> filters) {}
 	@Override public boolean independent() {return false;}
-	@Override public boolean isDebug() {return false;}
+	@Override public boolean isDebug() {return true;}
 }

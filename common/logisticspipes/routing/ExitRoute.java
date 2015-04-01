@@ -113,4 +113,25 @@ public class ExitRoute implements Comparable<ExitRoute>{
 		filter.addAll(filterB);
 		this.filters = Collections.unmodifiableList(filter);
 	}
+
+	public boolean covers(ExitRoute value) {
+		if(connectionDetails.containsAll(value.connectionDetails)) {
+			if(filters.isEmpty()) {
+				return true;
+			}
+			if(value.filters.containsAll(filters)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	public boolean isImprovedBy(ExitRoute value) {
+		if(connectionDetails.equals(value.connectionDetails)) {
+			if(value.filters.equals(filters)) {
+				return this.distanceToDestination > value.distanceToDestination;
+			}
+		}
+		return false;
+	}
 }

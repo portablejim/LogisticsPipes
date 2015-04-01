@@ -11,6 +11,7 @@ package logisticspipes.routing;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.BitSet;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.EnumSet;
@@ -26,6 +27,10 @@ import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+
+import com.google.common.collect.HashMultimap;
+import com.google.common.collect.Multimap;
+import com.google.common.collect.Multimaps;
 
 import logisticspipes.api.ILogisticsPowerProvider;
 import logisticspipes.asm.te.ILPTEInformation;
@@ -75,7 +80,7 @@ public class ServerRouter implements IRouter, Comparable<ServerRouter> {
 	}
 	
 	protected class LSA {
-		public HashMap<IRouter, Quartet<Double, EnumSet<PipeRoutingConnectionType>, List<IFilter>, Integer>> neighboursWithMetric;
+		public Multimap<IRouter, Quartet<Double, EnumSet<PipeRoutingConnectionType>, List<IFilter>, Integer>> neighboursWithMetric;
 		public List<Pair<ILogisticsPowerProvider,List<IFilter>>> power;
 		public ArrayList<Pair<ISubSystemPowerProvider, List<IFilter>>>	subSystemPower;
 	}
@@ -125,9 +130,9 @@ public class ServerRouter implements IRouter, Comparable<ServerRouter> {
 	}
 
 	// these are maps, not hashMaps because they are unmodifiable Collections to avoid concurrentModification exceptions.
-	public Map<CoreRoutedPipe, ExitRoute> _adjacent = new HashMap<CoreRoutedPipe, ExitRoute>();
-	public Map<IRouter, ExitRoute> _adjacentRouter = new HashMap<IRouter, ExitRoute>();
-	public Map<IRouter, ExitRoute> _adjacentRouter_Old = new HashMap<IRouter, ExitRoute>();
+	public Multimap<CoreRoutedPipe, ExitRoute> _adjacent = HashMultimap.create();
+	public Multimap<IRouter, ExitRoute> _adjacentRouter = HashMultimap.create();
+	public Multimap<IRouter, ExitRoute> _adjacentRouter_Old = HashMultimap.create();
 	public List<Pair<ILogisticsPowerProvider,List<IFilter>>> _powerAdjacent = new ArrayList<Pair<ILogisticsPowerProvider,List<IFilter>>>();
 	public List<Pair<ISubSystemPowerProvider,List<IFilter>>> _subSystemPowerAdjacent = new ArrayList<Pair<ISubSystemPowerProvider,List<IFilter>>>();
 	
@@ -220,7 +225,7 @@ public class ServerRouter implements IRouter, Comparable<ServerRouter> {
 		this._zCoord = zCoord;
 		clearPipeCache();
 		_myLsa = new LSA();
-		_myLsa.neighboursWithMetric = new HashMap<IRouter, Quartet<Double, EnumSet<PipeRoutingConnectionType>, List<IFilter>, Integer>>();
+		_myLsa.neighboursWithMetric = HashMultimap.create();
 		_myLsa.power = new ArrayList<Pair<ILogisticsPowerProvider,List<IFilter>>>();
 		SharedLSADatabasewriteLock.lock(); // any time after we claim the SimpleID, the database could be accessed at that index
 		simpleID = claimSimpleID();
@@ -360,7 +365,7 @@ public class ServerRouter implements IRouter, Comparable<ServerRouter> {
 		boolean adjacentChanged = false;
 		CoreRoutedPipe thisPipe = getPipe();
 		if (thisPipe == null) return false;
-		HashMap<CoreRoutedPipe, ExitRoute> adjacent;
+		Multimap<CoreRoutedPipe, ExitRoute> adjacent;
 		List<Pair<ILogisticsPowerProvider,List<IFilter>>> power;
 		List<Pair<ISubSystemPowerProvider,List<IFilter>>> subSystemPower;
 		PathFinder finder = new PathFinder(thisPipe.container, Configs.LOGISTICS_DETECTION_COUNT, Configs.LOGISTICS_DETECTION_LENGTH, localChangeListener);
@@ -448,13 +453,13 @@ public class ServerRouter implements IRouter, Comparable<ServerRouter> {
 				}
 			}
 		}
-		for (Entry<CoreRoutedPipe, ExitRoute> pipe : adjacent.entrySet())	{
-			ExitRoute oldExit = _adjacent.get(pipe.getKey());
-			if (oldExit==null){
+		for (Entry<CoreRoutedPipe, Collection<ExitRoute>> pipe : adjacent.asMap().entrySet())	{
+			Collection<ExitRoute> oldExit = _adjacent.get(pipe.getKey());
+			if (oldExit.isEmpty()){
 				adjacentChanged = true;
 				break;
 			}
-			ExitRoute newExit = pipe.getValue();
+			Collection<ExitRoute> newExit = pipe.getValue();
 			
 			if (!newExit.equals(oldExit))	{
 				adjacentChanged = true;
@@ -462,10 +467,10 @@ public class ServerRouter implements IRouter, Comparable<ServerRouter> {
 			}
 		}		
 		if (adjacentChanged) {
-			HashMap<IRouter, ExitRoute> adjacentRouter = new HashMap<IRouter, ExitRoute>();
+			Multimap<IRouter, ExitRoute> adjacentRouter = HashMultimap.create();
 			EnumSet<ForgeDirection> routedexits = EnumSet.noneOf(ForgeDirection.class);
 			EnumMap<ForgeDirection, Integer> subpowerexits = new EnumMap<ForgeDirection, Integer>(ForgeDirection.class);
-			for(Entry<CoreRoutedPipe,ExitRoute> pipe:adjacent.entrySet()) {
+			for(Entry<CoreRoutedPipe,ExitRoute> pipe:adjacent.entries()) {
 				adjacentRouter.put(pipe.getKey().getRouter(), pipe.getValue());
 				if((pipe.getValue().connectionDetails.contains(PipeRoutingConnectionType.canRouteTo) || pipe.getValue().connectionDetails.contains(PipeRoutingConnectionType.canRequestFrom) && !routedexits.contains(pipe.getValue().exitOrientation))) {
 					routedexits.add(pipe.getValue().exitOrientation);
@@ -474,9 +479,9 @@ public class ServerRouter implements IRouter, Comparable<ServerRouter> {
 					subpowerexits.put(pipe.getValue().exitOrientation, PathFinder.messureDistanceToNextRoutedPipe(this.getLPPosition(), pipe.getValue().exitOrientation, pipe.getKey().getWorld()));
 				}
 			}
-			_adjacent = Collections.unmodifiableMap(adjacent);
+			_adjacent = Multimaps.unmodifiableMultimap(adjacent);
 			_adjacentRouter_Old = _adjacentRouter;
-			_adjacentRouter = Collections.unmodifiableMap(adjacentRouter);
+			_adjacentRouter = Multimaps.unmodifiableMultimap(adjacentRouter);
 			if(power != null){
 				_powerAdjacent = Collections.unmodifiableList(power);
 			} else {
@@ -494,13 +499,13 @@ public class ServerRouter implements IRouter, Comparable<ServerRouter> {
 		return adjacentChanged;
 	}
 	
-	private void checkSecurity(HashMap<CoreRoutedPipe, ExitRoute> adjacent) {
+	private void checkSecurity(Multimap<CoreRoutedPipe, ExitRoute> adjacent) {
 		CoreRoutedPipe pipe = getPipe();
 		if(pipe == null) return;
 		UUID id = pipe.getSecurityID();
 		List<CoreRoutedPipe> toRemove = new ArrayList<CoreRoutedPipe>();
 		if(id != null) {
-			for(Entry<CoreRoutedPipe, ExitRoute> entry:adjacent.entrySet()) {
+			for(Entry<CoreRoutedPipe, ExitRoute> entry:adjacent.entries()) {
 				if(!entry.getValue().connectionDetails.contains(PipeRoutingConnectionType.canRouteTo) && !entry.getValue().connectionDetails.contains(PipeRoutingConnectionType.canRequestFrom)) continue;
 				UUID thatId = entry.getKey().getSecurityID();
 				if(!(pipe instanceof PipeItemsFirewall)) {
@@ -517,20 +522,20 @@ public class ServerRouter implements IRouter, Comparable<ServerRouter> {
 					}
 				}
 			}
-			for(Entry<CoreRoutedPipe, ExitRoute> entry:adjacent.entrySet()) {
+			for(Entry<CoreRoutedPipe, ExitRoute> entry:adjacent.entries()) {
 				if(sideDisconnected[entry.getValue().exitOrientation.ordinal()]) {
 					toRemove.add(entry.getKey());
 				}
 			}
 			for(CoreRoutedPipe remove:toRemove) {
-				adjacent.remove(remove);
+				adjacent.removeAll(remove);
 			}
 		}
 	}
 
 	private void SendNewLSA() {
-		HashMap<IRouter, Quartet<Double, EnumSet<PipeRoutingConnectionType>, List<IFilter>, Integer>> neighboursWithMetric = new HashMap<IRouter, Quartet<Double, EnumSet<PipeRoutingConnectionType>, List<IFilter>, Integer>>();
-		for (Entry<IRouter, ExitRoute> adjacent : _adjacentRouter.entrySet()){
+		Multimap<IRouter, Quartet<Double, EnumSet<PipeRoutingConnectionType>, List<IFilter>, Integer>> neighboursWithMetric = HashMultimap.create();
+		for (Entry<IRouter, ExitRoute> adjacent : _adjacentRouter.entries()){
 			neighboursWithMetric.put(adjacent.getKey(), new Quartet<Double, EnumSet<PipeRoutingConnectionType>, List<IFilter>, Integer>(adjacent.getValue().distanceToDestination, adjacent.getValue().connectionDetails, adjacent.getValue().filters, adjacent.getValue().blockDistance));
 		}
 		ArrayList<Pair<ILogisticsPowerProvider,List<IFilter>>> power = null;
@@ -606,7 +611,7 @@ public class ServerRouter implements IRouter, Comparable<ServerRouter> {
 		
 		//Init candidates
 		// the shortest way to go to an adjacent item is the adjacent item.
-		for (Entry<IRouter, ExitRoute> pipe :  _adjacentRouter.entrySet()){
+		for (Entry<IRouter, ExitRoute> pipe : _adjacentRouter.entries()){
 			ExitRoute currentE = pipe.getValue();
 			IRouter newRouter = pipe.getKey();
 			if(newRouter != null) {
@@ -714,7 +719,7 @@ public class ServerRouter implements IRouter, Comparable<ServerRouter> {
 					}
 				}
 			}
-		    Iterator<Entry<IRouter, Quartet<Double, EnumSet<PipeRoutingConnectionType>, List<IFilter>, Integer>>> it = lsa.neighboursWithMetric.entrySet().iterator();
+		    Iterator<Entry<IRouter, Quartet<Double, EnumSet<PipeRoutingConnectionType>, List<IFilter>, Integer>>> it = lsa.neighboursWithMetric.entries().iterator();
 		    while (it.hasNext()) {
 		    	Entry<IRouter, Quartet<Double, EnumSet<PipeRoutingConnectionType>, List<IFilter>, Integer>> newCandidate = it.next();
 				double candidateCost = lowestCostNode.distanceToDestination + newCandidate.getValue().getValue1();
@@ -768,12 +773,17 @@ public class ServerRouter implements IRouter, Comparable<ServerRouter> {
 		while (itr.hasNext()) {
 			ExitRoute node = itr.next();
 			IRouter firstHop = node.root;
-			ExitRoute hop = _adjacentRouter.get(firstHop);
-			if (hop == null) {
+			Collection<ExitRoute> hop = _adjacentRouter.get(firstHop);
+			if (hop.isEmpty()) {
 				continue;
 			}
 			node.root = this; // replace the root with this, rather than the first hop.
-			node.exitOrientation = hop.exitOrientation;
+			if(hop.size() == 1) {
+				node.exitOrientation = hop.iterator().next().exitOrientation;
+			} else {
+				node.exitOrientation = hop.iterator().next().exitOrientation;
+				System.out.print("");
+			}
 			while (node.destination.getSimpleID() >= routeTable.size()) { // the array will not expand, as it is init'd to contain enough elements
 				routeTable.add(null);
 			}
@@ -915,7 +925,7 @@ public class ServerRouter implements IRouter, Comparable<ServerRouter> {
 		for(IRouter r : _adjacentRouter_Old.keySet()) {
 			r.act(visited, new flagForLSAUpdate());
 		}
-		_adjacentRouter_Old = new HashMap<IRouter, ExitRoute>();
+		_adjacentRouter_Old = HashMultimap.create();
 		this.act(visited, new flagForLSAUpdate());
 	}
 	

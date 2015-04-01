@@ -4,12 +4,13 @@ import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 
+import logisticspipes.interfaces.routing.IFilter;
 import logisticspipes.interfaces.routing.ISpecialPipedConnection;
 import logisticspipes.routing.PipeRoutingConnectionType;
 import logisticspipes.routing.pathfinder.IPipeInformationProvider;
-import logisticspipes.utils.tuples.Quartet;
 import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.Getter;
 import net.minecraftforge.common.util.ForgeDirection;
 
 public class SpecialPipeConnection {
@@ -39,5 +40,6 @@ public class SpecialPipeConnection {
 		private ForgeDirection insertOrientation;
 		private ForgeDirection exitOrientation;
 		private double distance;
+		private final List<IFilter> filters = new ArrayList<IFilter>();
 	}
 }

@@ -15,8 +15,12 @@ import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map.Entry;
+
+import com.google.common.collect.HashMultimap;
+import com.google.common.collect.Multimap;
 
 import logisticspipes.api.ILogisticsPowerProvider;
 import logisticspipes.asm.te.ILPTEInformation;
@@ -58,10 +62,10 @@ public class PathFinder {
 	 * @return
 	 */
 	
-	public static HashMap<CoreRoutedPipe, ExitRoute> paintAndgetConnectedRoutingPipes(TileEntity startPipe, ForgeDirection startOrientation, int maxVisited, int maxLength, IPaintPath pathPainter, EnumSet<PipeRoutingConnectionType> connectionType) {
+	public static Multimap<CoreRoutedPipe, ExitRoute> paintAndgetConnectedRoutingPipes(TileEntity startPipe, ForgeDirection startOrientation, int maxVisited, int maxLength, IPaintPath pathPainter, EnumSet<PipeRoutingConnectionType> connectionType) {
 		IPipeInformationProvider startProvider = SimpleServiceLocator.pipeInformaitonManager.getInformationProviderFor(startPipe);
 		if(startProvider == null) {
-			return new HashMap<CoreRoutedPipe, ExitRoute>();
+			return HashMultimap.create();
 		}
 		PathFinder newSearch = new PathFinder(maxVisited, maxLength, pathPainter);
 		LPPosition p = new LPPosition(startProvider);
@@ -70,7 +74,7 @@ public class PathFinder {
 		TileEntity entity = p.getTileEntity(startProvider.getWorld());
 		IPipeInformationProvider provider = SimpleServiceLocator.pipeInformaitonManager.getInformationProviderFor(entity);
 		if (provider == null) {
-			return new HashMap<CoreRoutedPipe, ExitRoute>();
+			return HashMultimap.create();
 		}
 		return newSearch.getConnectedRoutingPipes(provider, connectionType, startOrientation);
 	}
@@ -78,7 +82,7 @@ public class PathFinder {
 	public PathFinder(IPipeInformationProvider startPipe, int maxVisited, int maxLength, ITileEntityChangeListener changeListener) {
 		this(maxVisited, maxLength, null);
 		if(startPipe == null) {
-			result = new HashMap<CoreRoutedPipe, ExitRoute>();
+			result = HashMultimap.create();
 			return;
 		}
 		this.changeListener = changeListener;
@@ -108,13 +112,13 @@ public class PathFinder {
 
 	public List<Pair<ILogisticsPowerProvider,List<IFilter>>> powerNodes;
 	public List<Pair<ISubSystemPowerProvider,List<IFilter>>> subPowerProvider;
-	public HashMap<CoreRoutedPipe, ExitRoute> result;
+	public Multimap<CoreRoutedPipe, ExitRoute> result;
 	
 	public ITileEntityChangeListener changeListener;
 	public List<List<ITileEntityChangeListener>> listenedPipes = new ArrayList<List<ITileEntityChangeListener>>();
 	
-	private HashMap<CoreRoutedPipe, ExitRoute> getConnectedRoutingPipes(IPipeInformationProvider startPipe, EnumSet<PipeRoutingConnectionType> connectionFlags, ForgeDirection side) {
-		HashMap<CoreRoutedPipe, ExitRoute> foundPipes = new HashMap<CoreRoutedPipe, ExitRoute>();
+	private Multimap<CoreRoutedPipe, ExitRoute> getConnectedRoutingPipes(IPipeInformationProvider startPipe, EnumSet<PipeRoutingConnectionType> connectionFlags, ForgeDirection side) {
+		Multimap<CoreRoutedPipe, ExitRoute> foundPipes = HashMultimap.create();
 		
 		boolean root = setVisited.size() == 0;
 		
@@ -169,14 +173,32 @@ public class PathFinder {
 				continue;
 			}
 			distances.put(new LPPosition(startPipe).center(), specialConnection.getDistance());
-			HashMap<CoreRoutedPipe, ExitRoute> result = getConnectedRoutingPipes(specialConnection.getConnectedPipe(), specialConnection.getConnectionFlags(), specialConnection.getInsertOrientation());
+			Multimap<CoreRoutedPipe, ExitRoute> result = getConnectedRoutingPipes(specialConnection.getConnectedPipe(), specialConnection.getConnectionFlags(), specialConnection.getInsertOrientation());
 			distances.remove(new LPPosition(startPipe).center());
-			for (Entry<CoreRoutedPipe, ExitRoute> pipe : result.entrySet()) {
-				pipe.getValue().exitOrientation = specialConnection.getExitOrientation();
-				ExitRoute foundPipe=foundPipes.get(pipe.getKey());
-				if (foundPipe == null || (pipe.getValue().distanceToDestination < foundPipe.distanceToDestination)) {
-					// New path OR 	If new path is better, replace old path
-					foundPipes.put(pipe.getKey(), pipe.getValue());
+			for (Entry<CoreRoutedPipe, Collection<ExitRoute>> entry : result.asMap().entrySet()) {
+				for(ExitRoute newRoute: entry.getValue()) {
+					newRoute.exitOrientation = specialConnection.getExitOrientation();
+					newRoute.filters = new ArrayList<IFilter>(newRoute.filters);
+					newRoute.filters.addAll(specialConnection.getFilters());
+					Collection<ExitRoute> availableRoutes = foundPipes.get(entry.getKey());
+					boolean isCovered = false;
+					Iterator<ExitRoute> iter = availableRoutes.iterator();
+					while(iter.hasNext()) {
+						ExitRoute containedRoute = iter.next();
+						if(containedRoute.covers(newRoute)) {
+							isCovered = true;
+						}
+						if(containedRoute.isImprovedBy(newRoute)) {
+							isCovered = true;
+							iter.remove();
+							foundPipes.put(entry.getKey(), newRoute);
+							break;
+						}
+					}
+					if (!isCovered) {
+						// New path OR 	If new path is better, replace old path
+						foundPipes.put(entry.getKey(), newRoute);
+					}
 				}
 			}
 		}
@@ -296,22 +318,35 @@ public class PathFinder {
 				}
 
 				int beforeRecurseCount = foundPipes.size();
-				HashMap<CoreRoutedPipe, ExitRoute> result = getConnectedRoutingPipes(currentPipe, nextConnectionFlags, direction);
-				for(Entry<CoreRoutedPipe, ExitRoute> pipeEntry : result.entrySet()) {
+				Multimap<CoreRoutedPipe, ExitRoute> result = getConnectedRoutingPipes(currentPipe, nextConnectionFlags, direction);
+				for(Entry<CoreRoutedPipe, ExitRoute> pipeEntry : result.entries()) {
 					//Update Result with the direction we took
 					pipeEntry.getValue().exitOrientation = direction;
-					ExitRoute foundPipe = foundPipes.get(pipeEntry.getKey());
-					if (foundPipe==null) {
+					Collection<ExitRoute> foundPipe = foundPipes.get(pipeEntry.getKey());
+					if (foundPipe.isEmpty()) {
 						// New path
 						foundPipes.put(pipeEntry.getKey(), pipeEntry.getValue());
 						//Add resistance
 						pipeEntry.getValue().distanceToDestination += resistance;
-					}
-					else if (pipeEntry.getValue().distanceToDestination + resistance < foundPipe.distanceToDestination) {
-						//If new path is better, replace old path, otherwise do nothing
-						foundPipes.put(pipeEntry.getKey(), pipeEntry.getValue());
-						//Add resistance
-						pipeEntry.getValue().distanceToDestination += resistance;
+					} else {
+						boolean isCovered = false;
+						Iterator<ExitRoute> iter = foundPipe.iterator();
+						while(iter.hasNext()) {
+							ExitRoute containedRoute = iter.next();
+							if(containedRoute.covers(pipeEntry.getValue())) {
+								isCovered = true;
+							}
+							if(containedRoute.isImprovedBy(pipeEntry.getValue())) {
+								isCovered = true;
+								iter.remove();
+								foundPipes.put(pipeEntry.getKey(), pipeEntry.getValue());
+								break;
+							}
+						}
+						if (!isCovered) {
+							// New path OR 	If new path is better, replace old path
+							foundPipes.put(pipeEntry.getKey(), pipeEntry.getValue());
+						}
 					}
 				}
 				if (foundPipes.size() > beforeRecurseCount && pathPainter != null) {
@@ -329,8 +364,12 @@ public class PathFinder {
 		//If we are a FireWall pipe add our filter to the pipes
 		if(startPipe.isFirewallPipe() && root) {
 			for(ExitRoute e:foundPipes.values()) {
-				e.filters = new OneList<IFilter>(startPipe.getFirewallFilter());
+				e.filters = new ArrayList<IFilter>(e.filters);
+				e.filters.add(startPipe.getFirewallFilter());
 			}
+		}
+		for(ExitRoute e:foundPipes.values()) { //Finalize Filters
+			e.filters = Collections.unmodifiableList(e.filters);
 		}
 		return foundPipes;
 	}
